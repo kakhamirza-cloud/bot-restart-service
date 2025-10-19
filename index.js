@@ -1,54 +1,31 @@
 const cron = require('node-cron');
-const axios = require('axios');
+const { exec } = require('child_process');
+const { promisify } = require('util');
 require('dotenv').config();
 
-// Railway API configuration
-const RAILWAY_API_URL = 'https://backboard.railway.app/graphql/v1';
-const RAILWAY_TOKEN = process.env.RAILWAY_TOKEN;
+const execAsync = promisify(exec);
 
-// Service IDs (you'll need to replace these with your actual service IDs)
-const GLYPHS_BOT_GAME_SERVICE_ID = process.env.GLYPHS_BOT_GAME_SERVICE_ID;
-const GLYPHS_BOT_1_SERVICE_ID = process.env.GLYPHS_BOT_1_SERVICE_ID;
+// Service names (using service names instead of IDs for Railway CLI)
+const GLYPHS_BOT_GAME_SERVICE_NAME = process.env.GLYPHS_BOT_GAME_SERVICE_NAME || 'glyphs-bot-game';
+const GLYPHS_BOT_1_SERVICE_NAME = process.env.GLYPHS_BOT_1_SERVICE_NAME || 'glyphs-bot-1';
 
-// GraphQL mutation to restart a service
-const RESTART_MUTATION = `
-  mutation ServiceRestart($serviceId: String!) {
-    serviceRestart(serviceId: $serviceId) {
-      id
-      name
-    }
-  }
-`;
-
-// Function to restart a Railway service
-async function restartService(serviceId, serviceName) {
+// Function to restart a Railway service using CLI
+async function restartService(serviceName, displayName) {
   try {
-    console.log(`🔄 Attempting to restart ${serviceName}...`);
+    console.log(`🔄 Attempting to restart ${displayName}...`);
     
-    const response = await axios.post(RAILWAY_API_URL, {
-      query: RESTART_MUTATION,
-      variables: {
-        serviceId: serviceId
-      }
-    }, {
-      headers: {
-        'Authorization': `Bearer ${RAILWAY_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    if (response.data.errors) {
-      throw new Error(`GraphQL Error: ${JSON.stringify(response.data.errors)}`);
+    // Use Railway CLI to redeploy the service
+    const { stdout, stderr } = await execAsync(`railway redeploy -s ${serviceName} -y`);
+    
+    if (stderr && !stderr.includes('Warning')) {
+      throw new Error(`CLI Error: ${stderr}`);
     }
 
-    if (response.data.data && response.data.data.serviceRestart) {
-      console.log(`✅ Successfully restarted ${serviceName} (ID: ${serviceId})`);
-      return true;
-    } else {
-      throw new Error('No restart data returned');
-    }
+    console.log(`✅ Successfully restarted ${displayName} (Service: ${serviceName})`);
+    console.log(`📋 CLI Output: ${stdout.trim()}`);
+    return true;
   } catch (error) {
-    console.error(`❌ Failed to restart ${serviceName}:`, error.message);
+    console.error(`❌ Failed to restart ${displayName}:`, error.message);
     return false;
   }
 }
@@ -61,18 +38,25 @@ function logTime() {
   console.log(`\n⏰ Current Time - UTC: ${utcTime} | Local: ${localTime}`);
 }
 
-// Validate environment variables
-function validateConfig() {
-  const required = ['RAILWAY_TOKEN', 'GLYPHS_BOT_GAME_SERVICE_ID', 'GLYPHS_BOT_1_SERVICE_ID'];
-  const missing = required.filter(key => !process.env[key]);
-  
-  if (missing.length > 0) {
-    console.error('❌ Missing required environment variables:', missing.join(', '));
-    console.error('Please set these in your Railway environment variables or .env file');
+// Validate configuration
+async function validateConfig() {
+  try {
+    // Check if Railway CLI is available and user is logged in
+    const { stdout } = await execAsync('railway whoami');
+    console.log('✅ Railway CLI is available and user is logged in');
+    console.log(`👤 Logged in as: ${stdout.trim()}`);
+    
+    // Check if services exist
+    const { stdout: listOutput } = await execAsync('railway list');
+    console.log('📋 Available projects:');
+    console.log(listOutput);
+    
+    console.log('✅ Configuration validated successfully');
+  } catch (error) {
+    console.error('❌ Railway CLI validation failed:', error.message);
+    console.error('Please ensure Railway CLI is installed and you are logged in');
     process.exit(1);
   }
-  
-  console.log('✅ All required environment variables are set');
 }
 
 // Main function
@@ -81,17 +65,17 @@ async function main() {
   logTime();
   
   // Validate configuration
-  validateConfig();
+  await validateConfig();
   
   console.log('📋 Service Configuration:');
-  console.log(`   - Glyphs Bot Game Service ID: ${GLYPHS_BOT_GAME_SERVICE_ID}`);
-  console.log(`   - Glyphs Bot 1 Service ID: ${GLYPHS_BOT_1_SERVICE_ID}`);
+  console.log(`   - Glyphs Bot Game Service: ${GLYPHS_BOT_GAME_SERVICE_NAME}`);
+  console.log(`   - Glyphs Bot 1 Service: ${GLYPHS_BOT_1_SERVICE_NAME}`);
   
   // Schedule: Restart Glyphs Bot Game every hour (at minute 0)
   cron.schedule('0 * * * *', async () => {
     logTime();
     console.log('🕐 Hourly restart triggered for Glyphs Bot Game');
-    await restartService(GLYPHS_BOT_GAME_SERVICE_ID, 'Glyphs Bot Game');
+    await restartService(GLYPHS_BOT_GAME_SERVICE_NAME, 'Glyphs Bot Game');
   }, {
     timezone: 'UTC'
   });
@@ -100,7 +84,7 @@ async function main() {
   cron.schedule('0 17 * * *', async () => {
     logTime();
     console.log('🕔 Daily restart triggered for Glyphs Bot 1 (5:00 PM UTC)');
-    await restartService(GLYPHS_BOT_1_SERVICE_ID, 'Glyphs Bot 1');
+    await restartService(GLYPHS_BOT_1_SERVICE_NAME, 'Glyphs Bot 1');
   }, {
     timezone: 'UTC'
   });
@@ -127,3 +111,5 @@ main().catch(error => {
   console.error('❌ Fatal error starting service:', error);
   process.exit(1);
 });
+
+
