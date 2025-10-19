@@ -4,7 +4,8 @@
   "description": "Automated restart service for Glyphs Bot 1 and Glyphs Bot Game",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "postinstall": "npm install -g @railway/cli",
+    "start": "npm run postinstall && node index.js",
     "dev": "node index.js"
   },
   "dependencies": {
