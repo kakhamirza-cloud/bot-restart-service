@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const { exec } = require('child_process');
 const { promisify } = require('util');
 require('dotenv').config();
+const axios = require('axios');
 
 const execAsync = promisify(exec);
 
@@ -9,23 +10,49 @@ const execAsync = promisify(exec);
 const GLYPHS_BOT_GAME_SERVICE_NAME = process.env.GLYPHS_BOT_GAME_SERVICE_NAME || 'glyphs-bot-game';
 const GLYPHS_BOT_1_SERVICE_NAME = process.env.GLYPHS_BOT_1_SERVICE_NAME || 'glyphs-bot-1';
 
-// Function to restart a Railway service using CLI
-async function restartService(serviceName, displayName) {
-  try {
-    console.log(`🔄 Attempting to restart ${displayName}...`);
-    
-    // Use Railway CLI to redeploy the service
-    const { stdout, stderr } = await execAsync(`railway redeploy -s ${serviceName} -y`);
-    
-    if (stderr && !stderr.includes('Warning')) {
-      throw new Error(`CLI Error: ${stderr}`);
-    }
+const RAILWAY_TOKEN = process.env.RAILWAY_TOKEN;
+const PROJECT_ID = process.env.RAILWAY_PROJECT_ID;
+const GLYPHS_BOT_GAME_SERVICE_ID = process.env.GLYPHS_BOT_GAME_SERVICE_ID;
+const GLYPHS_BOT_1_SERVICE_ID = process.env.GLYPHS_BOT_1_SERVICE_ID;
 
-    console.log(`✅ Successfully restarted ${displayName} (Service: ${serviceName})`);
-    console.log(`📋 CLI Output: ${stdout.trim()}`);
-    return true;
+const TRIGGER_REDEPLOY_MUTATION = `
+  mutation deploymentTrigger($input: DeploymentTriggerInput!) {
+    deploymentTrigger(input: $input) {
+      id
+      url
+      createdAt
+    }
+  }
+`;
+
+async function redeployService(projectId, serviceId, serviceName) {
+  try {
+    console.log(`🔄 Attempting to redeploy ${serviceName}...`);
+    const response = await axios.post(
+      'https://backboard.railway.app/graphql/v2',
+      {
+        query: TRIGGER_REDEPLOY_MUTATION,
+        variables: { input: { projectId, serviceId } },
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${RAILWAY_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    if (response.data.errors) {
+      throw new Error(`GraphQL Error: ${JSON.stringify(response.data.errors)}`);
+    }
+    const deployment = response.data.data?.deploymentTrigger;
+    if (deployment && deployment.url) {
+      console.log(`✅ Redeployed ${serviceName}. Deployment URL: ${deployment.url}`);
+      return true;
+    } else {
+      throw new Error('No deployment info returned');
+    }
   } catch (error) {
-    console.error(`❌ Failed to restart ${displayName}:`, error.message);
+    console.error(`❌ Failed to redeploy ${serviceName}:`, error.message);
     return false;
   }
 }
@@ -75,7 +102,7 @@ async function main() {
   cron.schedule('0 * * * *', async () => {
     logTime();
     console.log('🕐 Hourly restart triggered for Glyphs Bot Game');
-    await restartService(GLYPHS_BOT_GAME_SERVICE_NAME, 'Glyphs Bot Game');
+    await redeployService(PROJECT_ID, GLYPHS_BOT_GAME_SERVICE_ID, GLYPHS_BOT_GAME_SERVICE_NAME);
   }, {
     timezone: 'UTC'
   });
@@ -84,7 +111,7 @@ async function main() {
   cron.schedule('0 17 * * *', async () => {
     logTime();
     console.log('🕔 Daily restart triggered for Glyphs Bot 1 (5:00 PM UTC)');
-    await restartService(GLYPHS_BOT_1_SERVICE_NAME, 'Glyphs Bot 1');
+    await redeployService(PROJECT_ID, GLYPHS_BOT_1_SERVICE_ID, GLYPHS_BOT_1_SERVICE_NAME);
   }, {
     timezone: 'UTC'
   });
